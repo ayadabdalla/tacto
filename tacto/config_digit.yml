@@ -10,17 +10,17 @@ sensor:
   
   camera:
     - cam0:
-      position: [0, 0, 0.015] # Camera position
-      orientation: [90, 0, -90] # Euler angles, "xyz", in degrees; e.g. [0, 0, 0]: towards negative z-axis; [90, 0, -90]: towards x-axis
+      position: [0, 0, 0] # Camera position
+      orientation: [0, 0, 0] # Euler angles, "xyz", in degrees; e.g. [0, 0, 0]: towards negative z-axis; [90, 0, -90]: towards x-axis
       yfov: 60 # Vertical field of view in degrees
       znear: 0.001 # Distance to the near clipping plane, in meters
       lightIDList: [0, 1, 2] # Select light ID list for rendering (OpenGL has max limit of 8 lights)
   
   gel:
-    origin: [0.022, 0, 0.015] # Center coordinate of the gel, in meters
+    origin: [0, 0, -0.022] # Center coordinate of the gel, in meters
     width: 0.02 # Width of the gel, y-axis, in meters
     height: 0.03 # Height of the gel, z-axis, in meters
-    curvature: True  # Model the gel as curve? True/False
+    curvature: False  # Model the gel as curve? True/False
     curvatureMax: 0.005  # Deformation of the gel due to convexity
     R: 0.1 # Radius of curved gel
     countW: 100 # Number of samples for horizontal direction; higher the finer details
@@ -28,7 +28,7 @@ sensor:
   lights:
     # Light position & properties. 
 
-    origin: [0.005, 0, 0.015] # center of the light plane, in meters
+    origin: [0.005, 0, 0] # center of the light plane, in meters
 
     # Light position can be expressed in:
     # - polar coordinates: r and theta. (in y-z plane), and x coordinate of the plane
@@ -40,7 +40,7 @@ sensor:
     xrtheta: # polar coordinates in y-z plane
       xs: [0, 0, 0] # x coordinate of the y-z plane
       rs: [0.02, 0.02, 0.02] # r in polar coordinates
-      thetas: [30, 150, 270] # theta in polar coordinates, in degrees
+      thetas: [150, 30, 270] # theta in polar coordinates, in degrees
     
     colors: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] # R G B color
     intensities: [1, 1, 1] # light intensity

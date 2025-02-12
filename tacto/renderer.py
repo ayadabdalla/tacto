@@ -32,6 +32,8 @@ from omegaconf import OmegaConf
 from scipy.spatial.transform import Rotation as R
 
 logger = logging.getLogger(__name__)
+# activate logging
+logging.basicConfig(level=logging.INFO)
 
 
 def euler2matrix(angles=[0, 0, 0], translation=[0, 0, 0], xyz="xyz", degrees=False):
@@ -70,7 +72,7 @@ class Renderer:
         else:
             self._background_real = None
 
-        logger.info("Loading configuration from: %s" % config_path)
+        # logger.info("Loading configuration from: %s" % config_path)
         self.conf = OmegaConf.load(config_path)
 
         self.force_enabled = (
@@ -157,7 +159,7 @@ class Renderer:
 
         mesh_gel = pyrender.Mesh.from_trimesh(gel_trimesh, smooth=False)
         self.gel_pose0 = np.eye(4)
-        self.gel_node = pyrender.Node(mesh=mesh_gel, matrix=self.gel_pose0)
+        self.gel_node = pyrender.Node(mesh=mesh_gel, matrix=self.gel_pose0, name="gel")
         self.scene.add_node(self.gel_node)
 
         # Add extra gel node into scene_depth
@@ -185,10 +187,10 @@ class Renderer:
             # Flat gel surface
             gel_trimesh = trimesh.Trimesh(
                 vertices=[
-                    [X0, Y0 + W / 2, Z0 + H / 2],
-                    [X0, Y0 + W / 2, Z0 - H / 2],
-                    [X0, Y0 - W / 2, Z0 - H / 2],
-                    [X0, Y0 - W / 2, Z0 + H / 2],
+                    [X0+ W / 2, Y0 + H / 2, Z0],
+                    [X0- W / 2, Y0 + H / 2, Z0],
+                    [X0- W / 2, Y0 - H / 2, Z0],
+                    [X0+ W / 2, Y0 - H / 2, Z0],
                 ],
                 faces=[[0, 1, 2], [2, 3, 0]],
             )
@@ -203,7 +205,7 @@ class Renderer:
             z = np.linspace(Z0 - H / 2, Z0 + H / 2, M)
             yy, zz = np.meshgrid(y, z)
 
-            h = R - np.maximum(0, R ** 2 - (yy - Y0) ** 2 - (zz - Z0) ** 2) ** 0.5
+            h = R - np.maximum(0, R**2 - (yy - Y0) ** 2 - (zz - Z0) ** 2) ** 0.5
             xx = X0 - zrange * h / h.max()
 
             gel_trimesh = self._generate_trimesh_from_depth(xx)
@@ -277,18 +279,19 @@ class Renderer:
             cami = conf_cam[i]
 
             camera = pyrender.PerspectiveCamera(
-                yfov=np.deg2rad(cami.yfov), znear=cami.znear,
+                yfov=np.deg2rad(cami.yfov),
+                znear=cami.znear,
             )
             camera_zero_pose = euler2matrix(
-                angles=np.deg2rad(cami.orientation), translation=cami.position,
+                angles=np.deg2rad(cami.orientation),
+                translation=cami.position,
             )
             self.camera_zero_poses.append(camera_zero_pose)
 
             # Add camera node into scene
-            camera_node = pyrender.Node(camera=camera, matrix=camera_zero_pose)
+            camera_node = pyrender.Node(camera=camera, matrix=camera_zero_pose, name= "initial camera" + str(i))
             self.scene.add_node(camera_node)
             self.camera_nodes.append(camera_node)
-
             # Add extra camera node into scene_depth
             self.camera_node_depth = pyrender.Node(
                 camera=camera, matrix=camera_zero_pose
@@ -297,7 +300,6 @@ class Renderer:
 
             # Add corresponding light for rendering the camera
             self.cam_light_ids.append(list(cami.lightIDList))
-
     def _init_light(self):
         """
         Set up light
@@ -316,7 +318,7 @@ class Renderer:
             xs = light.xrtheta.xs
             for i in range(len(thetas)):
                 theta = np.pi / 180 * thetas[i]
-                xyz.append([xs[i], rs[i] * np.cos(theta), rs[i] * np.sin(theta)])
+                xyz.append([rs[i] * np.cos(theta), rs[i] * np.sin(theta),xs[i] ])
         else:
             # Apply cartesian coordinates
             xyz = np.array(light.xyz.coords)
@@ -358,7 +360,7 @@ class Renderer:
                     outerConeAngle=np.pi / 3,
                 )
 
-            light_node = pyrender.Node(light=light, matrix=light_pose_0)
+            light_node = pyrender.Node(light=light, matrix=light_pose_0, name=f"light{i}")
 
             self.scene.add_node(light_node)
             self.light_nodes.append(light_node)
@@ -375,16 +377,15 @@ class Renderer:
         """
         Add object into the scene
         """
-
         mesh = pyrender.Mesh.from_trimesh(objTrimesh)
         pose = euler2matrix(angles=orientation, translation=position)
-        obj_node = pyrender.Node(mesh=mesh, matrix=pose)
+        obj_node = pyrender.Node(mesh=mesh, matrix=pose, name=obj_name)
         self.scene.add_node(obj_node)
 
         self.object_nodes[obj_name] = obj_node
         self.current_object_nodes[obj_name] = obj_node
 
-    def update_camera_pose(self, position, orientation):
+    def update_camera_pose(self, position, orientation,name):
         """
         Update sensor pose (including camera, lighting, and gel surface)
         """
@@ -395,6 +396,7 @@ class Renderer:
         for i in range(self.nb_cam):
             camera_pose = pose.dot(self.camera_zero_poses[i])
             self.camera_nodes[i].matrix = camera_pose
+            self.camera_nodes[i].name = name
 
         # Update gel
         gel_pose = pose.dot(self.gel_pose0)
@@ -466,7 +468,7 @@ class Renderer:
 
         if self._background_real is not None:
             # Simulated difference image, with scaling factor 0.5
-            diff = (color.astype(np.float) - self._background_sim[camera_index]) * 0.5
+            diff = (color.astype(float) - self._background_sim[camera_index]) * 0.5
 
             # Add low-pass filter to match real readings
             diff = cv2.GaussianBlur(diff, (7, 7), 0)
@@ -484,7 +486,11 @@ class Renderer:
         return 0
 
     def adjust_with_force(
-        self, camera_pos, camera_ori, normal_forces, object_poses,
+        self,
+        camera_pos,
+        camera_ori,
+        normal_forces,
+        object_poses,
     ):
         """
         Adjust object pose with normal force feedback
@@ -515,7 +521,8 @@ class Renderer:
                 offset = -1.0
                 if obj_name in normal_forces:
                     offset = (
-                        min(self.max_force, normal_forces[obj_name]) / self.max_force
+                        min(self.max_force, np.max(normal_forces[obj_name]))
+                        / self.max_force
                     )
 
                 # Calculate pose changes based on normal force
@@ -525,7 +532,6 @@ class Renderer:
                 direction = camera_pos - obj_pos
                 direction = direction / (np.sum(direction ** 2) ** 0.5 + 1e-6)
                 obj_pos = obj_pos + offset * self.max_deformation * direction
-
             self.update_object_pose(obj_name, obj_pos, objOri)
 
     def _post_process(self, color, depth, camera_index, noise=True, calibration=True):
@@ -562,12 +568,13 @@ class Renderer:
                 camera_ori = R.from_matrix(camera_pose[:3, :3]).as_quat()
 
                 self.adjust_with_force(
-                    camera_pos, camera_ori, normal_forces, object_poses,
+                    camera_pos,
+                    camera_ori,
+                    normal_forces,
+                    object_poses,
                 )
-
             color, depth = self.r.render(self.scene, flags=self.flags_render)
             color, depth = self._post_process(color, depth, i, noise, calibration)
-
             colors.append(color)
             depths.append(depth)
 

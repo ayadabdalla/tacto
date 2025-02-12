@@ -103,3 +103,6 @@ experiments/rolling/outcmaes
 experiments/grasp_stability/logs
 experiments/grasp_stability/models
 experiments/grasp_stability/data
+
+#virtual environment
+.tacto/*

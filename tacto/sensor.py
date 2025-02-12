@@ -2,7 +2,7 @@
 
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
-
+import sys
 import collections
 import logging
 import os
@@ -16,8 +16,12 @@ import trimesh
 from urdfpy import URDF
 
 from .renderer import Renderer
+import pyrender
+import mujoco as mj
+from scipy.spatial.transform import Rotation as R
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 def _get_default_config(filename):
@@ -35,26 +39,70 @@ def get_digit_shadow_config_path():
 def get_omnitact_config_path():
     return _get_default_config("config_omnitact.yml")
 
+# Function to create a coordinate frame mesh in pyrender
+def create_coordinate_frame_mesh(size=2):
+    """Create a mesh representing the X, Y, and Z axes."""
+    # Define the lines for the X, Y, and Z axes
+    vertices = np.array([
+        [0, 0, 0],  # Origin
+        [size, 0, 0],  # X-axis
+        [0, size, 0],  # Y-axis
+        [0, 0, size]   # Z-axis
+    ])
+    # Define the indices for the lines
+    indices = np.array([
+        [0, 1],  # X-axis
+        [0, 2],  # Y-axis
+        [0, 3]   # Z-axis
+    ])
+    # Define colors for each axis (RGB)
+    colors = np.array([
+        [255, 0, 0],  # Red for X-axis
+        [0, 255, 0],  # Green for Y-axis
+        [0, 0, 255]   # Blue for Z-axis
+    ])
+    # Create a mesh from the lines
+    # Create a primitive for each axis
+    primitives = []
+    for i, (start, end) in enumerate(indices):
+        primitives.append(
+            pyrender.Primitive(
+                positions=vertices[[start, end]],
+                color_0=colors[i],
+                mode=pyrender.constants.GLTF.LINES
+            )
+        )
+    # Create a mesh from the primitives
+    return pyrender.Mesh(primitives=primitives, is_visible=True)
 
 @dataclass
 class Link:
     obj_id: int  # pybullet ID
     link_id: int  # pybullet link ID (-1 means base)
     cid: int  # physicsClientId
+    mujoco_data: any = None
+    mujoco_model: any = None
+    body_name: str = None
 
+    # get pose from mujoco
     def get_pose(self):
-        if self.link_id < 0:
-            # get the base pose if link ID < 0
-            position, orientation = p.getBasePositionAndOrientation(
-                self.obj_id, physicsClientId=self.cid
-            )
+        if self.body_name.startswith("touch"):
+            site_id = mj.mj_name2id(self.mujoco_model, mj.mjtObj.mjOBJ_SITE, self.body_name)
+            # Get the world-space position and orientation (rotation matrix)
+            cam_position = self.mujoco_data.site_xpos[site_id].copy()
+            cam_orientation = self.mujoco_data.site_xmat[site_id].reshape(3, 3).copy()
+            # Convert the rotation matrix to quaternion
+            cam_orientation = R.from_matrix(cam_orientation).as_quat(scalar_first=True)
+            orientation = cam_orientation
+            position = cam_position
         else:
-            # get the link pose if link ID >= 0
-            position, orientation = p.getLinkState(
-                self.obj_id, self.link_id, physicsClientId=self.cid
-            )[:2]
+            # Get the position and orientation
+            position = self.mujoco_data.xpos[self.obj_id].copy()
+            orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
+            orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
 
-        orientation = p.getEulerFromQuaternion(orientation, physicsClientId=self.cid)
+        # Convert quaternion to Euler angles (default ZYX convention: yaw, pitch, roll)
+        orientation = R.from_quat(orientation,scalar_first=True).as_euler('xyz', degrees=False)
         return position, orientation
 
 
@@ -105,77 +153,68 @@ class Sensor:
     @property
     def background(self):
         return self.renderer.background
+    
+    def add_camera_mujoco(self, sensor_name, model, data):
+        # Get the site ID using its name
+        site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, sensor_name)
+        self.cameras[sensor_name] = Link(site_id, -1, self.cid, data, model, sensor_name)
+        self.nb_cam += 1
 
-    def add_camera(self, obj_id, link_ids):
-        """
-        Add camera into tacto
-
-        self.cameras format: {
-            "cam0": Link,
-            "cam1": Link,
-            ...
-        }
-        """
-        if not isinstance(link_ids, collections.abc.Sequence):
-            link_ids = [link_ids]
-
-        for link_id in link_ids:
-            cam_name = "cam" + str(self.nb_cam)
-            self.cameras[cam_name] = Link(obj_id, link_id, self.cid)
-            self.nb_cam += 1
-
-    def add_object(self, urdf_fn, obj_id, globalScaling=1.0):
-        # Load urdf file by urdfpy
-        robot = URDF.load(urdf_fn)
-
-        for link_id, link in enumerate(robot.links):
-            if len(link.visuals) == 0:
-                continue
-            link_id = link_id - 1
-            # Get each links
-            visual = link.visuals[0]
-            obj_trimesh = visual.geometry.meshes[0]
-
-            # Set mesh color to default (remove texture)
-            obj_trimesh.visual = trimesh.visual.ColorVisuals()
-
-            # Set initial origin (pybullet pose already considered initial origin position, not orientation)
-            pose = visual.origin
-
-            # Scale if it is mesh object (e.g. STL, OBJ file)
-            mesh = visual.geometry.mesh
-            if mesh is not None and mesh.scale is not None:
-                S = np.eye(4, dtype=np.float64)
-                S[:3, :3] = np.diag(mesh.scale)
-                pose = pose.dot(S)
-
-            # Apply interial origin if applicable
-            inertial = link.inertial
-            if inertial is not None and inertial.origin is not None:
-                pose = np.linalg.inv(inertial.origin).dot(pose)
-
-            # Set global scaling
-            pose = np.diag([globalScaling] * 3 + [1]).dot(pose)
-
-            obj_trimesh = obj_trimesh.apply_transform(pose)
-            obj_name = "{}_{}".format(obj_id, link_id)
-
-            self.objects[obj_name] = Link(obj_id, link_id, self.cid)
-            position, orientation = self.objects[obj_name].get_pose()
-
-            # Add object in pyrender
-            self.renderer.add_object(
-                obj_trimesh,
-                obj_name,
-                position=position,  # [-0.015, 0, 0.0235],
-                orientation=orientation,  # [0, 0, 0],
-            )
-
-    def add_body(self, body):
-        self.add_object(
-            body.urdf_path, body.id, globalScaling=body.global_scaling or 1.0
+    def add_object_mujoco(self, body_name, model, data):
+        mesh_name = body_name + "_mesh"
+        # get object from mujoco
+        mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH,mesh_name)
+        print(f"mesh_id: {mesh_id}",mesh_name)
+        body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, body_name)
+        obj_trimesh = self.build_trimesh_from_mujoco(model,mesh_id)
+        self.objects[body_name] = Link(body_id, -1, self.cid,data,model, body_name=body_name)
+        position, orientation = self.objects[body_name].get_pose()
+        # Add object in pyrender
+        self.renderer.add_object(
+            obj_trimesh,
+            body_name,
+            position=position,
+            orientation=orientation,
         )
 
+    def add_body_mujoco(self, body, model, data):
+        self.add_object_mujoco(body, model, data)
+
+    def build_trimesh_from_mujoco(self,model, mesh_id):
+        """
+        Create a trimesh object from MuJoCo mesh data.
+
+        Parameters:
+            model: mjModel
+                The MuJoCo model containing mesh data.
+            mesh_id: int
+                The index of the mesh to extract.
+
+        Returns:
+            trimesh.Trimesh: The constructed trimesh object.
+        """
+        # Get starting index and number of vertices for the mesh
+        start_vert = model.mesh_vertadr[mesh_id]
+        num_vert = model.mesh_vertnum[mesh_id]
+        print(f"start_vert: {start_vert}, num_vert: {num_vert}")
+        
+        # Extract vertices (reshape to Nx3 array)
+        print(model.mesh_vert.shape)
+        vertices = model.mesh_vert[start_vert: start_vert + num_vert].reshape(-1, 3)
+        print(vertices.shape)
+        # switch up x and z axis
+        vertices = vertices[:, [2, 1, 0]]
+        # Get starting index and number of faces for the mesh
+        start_face = model.mesh_faceadr[mesh_id]
+        num_face = model.mesh_facenum[mesh_id]
+        
+        # Extract faces (reshape to Mx3 array of vertex indices)
+        faces = model.mesh_face[start_face :start_face + num_face].reshape(-1, 3)
+
+        # Create the trimesh object
+        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+        #show the mesh in a standalone window
+        return mesh
     def loadURDF(self, *args, **kwargs):
         warnings.warn(
             "\33[33mSensor.loadURDF is deprecated. Please use body = "
@@ -209,33 +248,19 @@ class Sensor:
         for obj_name in self.objects.keys():
             self.object_poses[obj_name] = self.objects[obj_name].get_pose()
 
-    def get_force(self, cam_name):
-        # Load contact force
-
-        obj_id = self.cameras[cam_name].obj_id
-        link_id = self.cameras[cam_name].link_id
-
-        pts = p.getContactPoints(
-            bodyA=obj_id, linkIndexA=link_id, physicsClientId=self.cid
-        )
-
-        # accumulate forces from 0. using defaultdict of float
-        self.normal_forces[cam_name] = collections.defaultdict(float)
-
-        for pt in pts:
-            body_id_b = pt[2]
-            link_id_b = pt[4]
-
-            obj_name = "{}_{}".format(body_id_b, link_id_b)
-
-            # ignore contacts we don't care (those not in self.objects)
-            if obj_name not in self.objects:
-                continue
-
-            # Accumulate normal forces
-            self.normal_forces[cam_name][obj_name] += pt[9]
-
-        return self.normal_forces[cam_name]
+    def get_force_mujoco(self, sensor_name, model, data):
+        # Fetch touch grid data
+        sensor_id = model.sensor(sensor_name).id
+        touch_data = data.sensordata[
+            sensor_id : sensor_id + model.sensor_dim[sensor_id]
+        ].reshape(
+            (120, 160, 3)
+        ) 
+        touch_data = touch_data[:, :, 0] # get only the normal forces
+        # get the object names in contact with the sensor
+        # contact_names = data.contact_names # TODO: get the contact names from mujoco
+        touch_data = {"can": touch_data}
+        return touch_data
 
     @property
     def static(self):
@@ -251,7 +276,7 @@ class Sensor:
         colors = [self.renderer._add_noise(color) for color in colors]
         return colors, depths
 
-    def render(self):
+    def render(self, model=None, data=None):
         """
         Render tacto images from each camera's view.
         """
@@ -260,19 +285,16 @@ class Sensor:
 
         colors = []
         depths = []
-
         for i in range(self.nb_cam):
-            cam_name = "cam" + str(i)
+            cam_name = f"touch"
 
             # get the contact normal forces
-            normal_forces = self.get_force(cam_name)
-
-            if normal_forces:
+            normal_forces = self.get_force_mujoco(cam_name, model,data)
+            if normal_forces is not None:
                 position, orientation = self.cameras[cam_name].get_pose()
-                self.renderer.update_camera_pose(position, orientation)
-                color, depth = self.renderer.render(self.object_poses, normal_forces)
-
-                # Remove the depth from curved gel
+                self.renderer.update_camera_pose(position, orientation,cam_name)
+                color, depth= self.renderer.render(self.object_poses, normal_forces)
+            # Remove the depth from curved gel
                 for j in range(len(depth)):
                     depth[j] = self.renderer.depth0[j] - depth[j]
             else:
