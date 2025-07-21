@@ -11,9 +11,7 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-import pybullet as p
 import trimesh
-from urdfpy import URDF
 
 from .renderer import Renderer
 import pyrender
@@ -98,6 +96,7 @@ class Link:
         else:
             # Get the position and orientation
             position = self.mujoco_data.xpos[self.obj_id].copy()
+            position[0] = -position[0] # Flip the x-axis, as pyrender uses LHS coordinate system
             orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
             orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
 
@@ -215,25 +214,6 @@ class Sensor:
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
         #show the mesh in a standalone window
         return mesh
-    def loadURDF(self, *args, **kwargs):
-        warnings.warn(
-            "\33[33mSensor.loadURDF is deprecated. Please use body = "
-            "pybulletX.Body(...) and Sensor.add_body(body) instead\33[0m."
-        )
-        """
-        Load the object urdf to pybullet and tacto simulator.
-        The tacto simulator will create the same scene in OpenGL for faster rendering
-        """
-        urdf_fn = args[0]
-        globalScaling = kwargs.get("globalScaling", 1.0)
-
-        # Add to pybullet
-        obj_id = p.loadURDF(physicsClientId=self.cid, *args, **kwargs)
-
-        # Add to tacto simulator scene
-        self.add_object(urdf_fn, obj_id, globalScaling=globalScaling)
-
-        return obj_id
 
     def update(self):
         warnings.warn(

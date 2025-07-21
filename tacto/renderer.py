@@ -25,7 +25,6 @@ import logging
 
 import cv2
 import numpy as np
-import pybullet as p
 import pyrender
 import trimesh
 from omegaconf import OmegaConf
