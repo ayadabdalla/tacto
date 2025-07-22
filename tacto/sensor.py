@@ -88,7 +88,6 @@ class Link:
     def get_pose(self):
         if self.body_name.startswith("touch"):
             site_id = mj.mj_name2id(self.mujoco_model, mj.mjtObj.mjOBJ_SITE, self.body_name)
-            # Get the world-space position and orientation (rotation matrix)
             cam_position = self.mujoco_data.site_xpos[site_id].copy()
             cam_orientation = self.mujoco_data.site_xmat[site_id].reshape(3, 3).copy()
             # Convert the rotation matrix to quaternion
@@ -98,6 +97,7 @@ class Link:
         else:
             # Get the position and orientation
             position = self.mujoco_data.xpos[self.obj_id].copy()
+            position[0] = -position[0] # camera in pyrender is left-handed
             orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
             orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
 
@@ -164,7 +164,6 @@ class Sensor:
         mesh_name = body_name + "_mesh"
         # get object from mujoco
         mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH,mesh_name)
-        print(f"mesh_id: {mesh_id}",mesh_name)
         body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, body_name)
         obj_trimesh = self.build_trimesh_from_mujoco(model,mesh_id)
         self.objects[body_name] = Link(body_id, -1, self.cid,data,model, body_name=body_name)
@@ -199,9 +198,7 @@ class Sensor:
         print(f"start_vert: {start_vert}, num_vert: {num_vert}")
         
         # Extract vertices (reshape to Nx3 array)
-        print(model.mesh_vert.shape)
         vertices = model.mesh_vert[start_vert: start_vert + num_vert].reshape(-1, 3)
-        print(vertices.shape)
         # switch up x and z axis
         vertices = vertices[:, [2, 1, 0]]
         # Get starting index and number of faces for the mesh
@@ -257,9 +254,18 @@ class Sensor:
             (120, 160, 3)
         ) 
         touch_data = touch_data[:, :, 0] # get only the normal forces
-        # get the object names in contact with the sensor
-        # contact_names = data.contact_names # TODO: get the contact names from mujoco
-        touch_data = {"can": touch_data}
+        contact_names = [mj.mj_id2name(model, mj.mjtObj.mjOBJ_GEOM, contact.geom1) for contact in data.contact]
+        # log contact names
+        logger.info(f"Contact names: {contact_names}")
+        for name in contact_names: # TODO:: @ayadabdalla expand to handle a number of objects
+            if name != "floor":
+                touch_data = {name: touch_data}
+                logger.info(f"Contact detected with {name}")
+                break
+        if len(contact_names)==0 or name == "floor":
+            # warning message
+            logger.warning("No contact detected")
+            touch_data = {"no object": touch_data}
         return touch_data
 
     @property
@@ -327,7 +333,7 @@ class Sensor:
             color_n_depth = np.concatenate([color, depth], axis=0)
 
             cv2.imshow(
-                "color and depth", cv2.cvtColor(color_n_depth, cv2.COLOR_RGB2BGR)
+                "Tacto Tactile Signal", cv2.cvtColor(color_n_depth, cv2.COLOR_RGB2BGR)
             )
         else:
             cv2.imshow("color", cv2.cvtColor(color, cv2.COLOR_RGB2BGR))
