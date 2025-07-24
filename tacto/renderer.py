@@ -413,7 +413,6 @@ class Renderer:
         """
 
         node = self.object_nodes[obj_name]
-        # position[0] = -position[0]
         pose = euler2matrix(angles=orientation, translation=position)
         self.scene.set_pose(node, pose=pose)
 

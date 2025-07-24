@@ -90,27 +90,33 @@ class Link:
 
     # get pose from mujoco
     def get_pose(self):
+        """
+        Gets the pose of the object in world coordinates, with x-axis flipped for pyrender.
+        """
         if self.is_camera:
+            # Camera is created from a site, so we need to access a different data
             site_id = mj.mj_name2id(
                 self.mujoco_model, mj.mjtObj.mjOBJ_SITE, self.body_name
             )
             # Get the world-space position and orientation (rotation matrix)
             position = self.mujoco_data.site_xpos[site_id].copy()
             orientation = self.mujoco_data.site_xmat[site_id].reshape(3, 3).copy()
-            # Convert the rotation matrix to quaternion
-            orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
-        else:
-            # Get the position and orientation
-            position = self.mujoco_data.xpos[self.obj_id].copy()
-            # position[0] = -position[0]
-            orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
-            orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
             
-
+        else:
+            # For bodies, just xpos / xmat is fine
+            position = self.mujoco_data.xpos[self.obj_id].copy()
+            orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
+        
         # Convert quaternion to Euler angles (default ZYX convention: yaw, pitch, roll)
+        orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
         orientation = R.from_quat(orientation, scalar_first=True).as_euler(
             "xyz", degrees=False
         )
+        
+        # pyrender's x-axis is flipped (LHS), so we need to flip the x-axis on pos and orientation
+        position[0] = -position[0]
+        orientation[1] = -orientation[1]  # Flip x-axis for MuJoCo
+        orientation[2] = -orientation[2]  # Flip x-axis for MuJoCo
         return position, orientation
 
 
