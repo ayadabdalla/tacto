@@ -74,45 +74,50 @@ def create_coordinate_frame_mesh(size=2):
     # Create a mesh from the primitives
     return pyrender.Mesh(primitives=primitives, is_visible=True)
 
-
 @dataclass
 class Link:
     """
     Dataset class for objects in MuJoCo.
     """
-    obj_id: int  # pybullet ID
-    link_id: int  # pybullet link ID (-1 means base)
-    cid: int  # physicsClientId
+    obj_id: int  # MuJoCo object ID
+    obj_type: mj.mjtObj  # MuJoCo object type
     mujoco_data: any = None
     mujoco_model: any = None
-    body_name: str = None
-    is_camera: bool = False
+    obj_name: str = None
 
     # get pose from mujoco
     def get_pose(self):
         """
         Gets the pose of the object in world coordinates, with x-axis flipped for pyrender.
         """
-        if self.is_camera:
+        if self.obj_type == mj.mjtObj.mjOBJ_SITE:
             # Camera is created from a site, so we need to access a different data
-            site_id = mj.mj_name2id(
-                self.mujoco_model, mj.mjtObj.mjOBJ_SITE, self.body_name
-            )
             # Get the world-space position and orientation (rotation matrix)
-            position = self.mujoco_data.site_xpos[site_id].copy()
-            orientation = self.mujoco_data.site_xmat[site_id].reshape(3, 3).copy()
-            
-        else:
+            position = self.mujoco_data.site_xpos[self.obj_id].copy()
+            orientation = self.mujoco_data.site_xmat[self.obj_id].reshape(3, 3).copy()
+            # print(f"Site {self.obj_name} pose: {position}, orientation: {orientation}")
+
+        elif self.obj_type == mj.mjtObj.mjOBJ_BODY:
             # For bodies, just xpos / xmat is fine
             position = self.mujoco_data.xpos[self.obj_id].copy()
             orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
-        
+            # print(f"Body {self.obj_name} pose: {position}, orientation: {orientation}")
+
+        elif self.obj_type == mj.mjtObj.mjOBJ_GEOM:
+            position = self.mujoco_data.geom_xpos[self.obj_id].copy()
+            orientation = self.mujoco_data.geom_xmat[self.obj_id].reshape(3, 3).copy()
+            # print(f"Geom {self.obj_name} pose: {position}, orientation: {orientation}")
+
+        else:
+            # Handle other object types if needed
+            raise NotImplementedError(
+                f"Object type {self.obj_type} not implemented for pose retrieval.")
         # Convert quaternion to Euler angles (default ZYX convention: yaw, pitch, roll)
-        orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
-        orientation = R.from_quat(orientation, scalar_first=True).as_euler(
-            "xyz", degrees=False
-        )
-        
+        orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
+        # orientation = R.from_quat(orientation, scalar_first=True).as_euler(
+        #     "xyz", degrees=False
+        # )
+
         # pyrender's x-axis is flipped (LHS), so we need to flip the x-axis on pos and orientation
         position[0] = -position[0]
         orientation[1] = -orientation[1]  # Flip x-axis for MuJoCo
@@ -200,7 +205,7 @@ class Sensor:
         site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, sensor_name)
         # Create the camera to be passed to pyrender
         self.cameras[sensor_name] = Link(
-            site_id, -1, self.cid, data, model, sensor_name, True
+            site_id, mj.mjtObj.mjOBJ_SITE, data, model, sensor_name
         )
         # Keep track of the number of cameras
         self.nb_cam = len(self.cameras.keys())
@@ -208,46 +213,61 @@ class Sensor:
         self.tacto_body_ids[sensor_name] = model.site_bodyid[site_id]
         self.camera_names = list(self.cameras.keys())
 
-    def add_object_mujoco(self, body_name, model, data, mesh_name=None):
+    def add_object_mujoco(self, obj_name, model, data, mesh_name=None, obj_type=mj.mjtObj.mjOBJ_BODY):
         """
         Add an object to the list of objects to be tracked by the sensor.
-        The given body_name is used to find the corresponding mesh's name as defined in the xml, by appending _mesh.
-        e.g. if body_name is "box_geom", the mesh name must be "box_geom_mesh".
+        The given obj_name is used to find the corresponding mesh's name as defined in the xml, by appending _mesh.
+        e.g. if obj_name is "box_geom", the mesh name must be "box_geom_mesh".
         This mesh is passed to pyrender for rendering the tacto image.
         Since it requires the corresponding object body's pose in the simulation, at least one mj_step should be called
         before this function.
 
-        :param body_name: str
+        :param obj_name: str
             Name of the body to be added. This is defined as a mujoco body, and its associated mesh is expected to be
-            defined in the mujoco model with the name body_name + "_mesh", unless provided otherwise.
+            defined in the mujoco model with the name obj_name + "_mesh", unless provided otherwise.
         :param model: mjModel
         :param data: mjData
         :param mesh_name: str, optional
             Name of the mesh to be used for the object. If not provided, it defaults to
-            body_name + "_mesh". This is useful if the mesh name differs from the default convention
+            obj_name + "_mesh". This is useful if the mesh name differs from the default convention
             of appending "_mesh" to the body name.
+        :param obj_type: mj.mjtObj, optional
+            either a mjOBJ_BODY or mjOBJ_GEOM. Defaults to mjOBJ_BODY.
         """
-        mesh_name = body_name + "_mesh" if mesh_name is None else mesh_name
-        # get object from mujoco
-        mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH, mesh_name)
-        print(f"mesh_id: {mesh_id}", mesh_name)
-        body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, body_name)
+        if(obj_type == mj.mjtObj.mjOBJ_BODY):
+            obj_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, obj_name)
+            body_id = obj_id
+        elif(obj_type == mj.mjtObj.mjOBJ_GEOM):
+            obj_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_GEOM, obj_name)
+            body_id = model.geom_bodyid[obj_id]
+        else:
+            raise ValueError(f"Unsupported object type: {obj_type}")
+
+        # Keep track of body id for contact checking
         self.object_body_ids.add(body_id)
-        obj_trimesh = self.build_trimesh_from_mujoco(model, mesh_id)
-        self.objects[body_name] = Link(
-            body_id, -1, self.cid, data, model, body_name=body_name
+        self.objects[obj_name] = Link(
+            obj_id, obj_type, data, model, obj_name
         )
-        position, orientation = self.objects[body_name].get_pose()
+        position, orientation = self.objects[obj_name].get_pose()
+
+        # Construct the trimesh
+        mesh_name = obj_name + "_mesh" if mesh_name is None else mesh_name
+        mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH, mesh_name)
+        assert mesh_id >= 0, f"Mesh {mesh_name} not found in model."
+        obj_trimesh = self.build_trimesh_from_mujoco(model, mesh_id)
         # Add object in pyrender
         self.renderer.add_object(
             obj_trimesh,
-            body_name,
+            obj_name,
             position=position,
             orientation=orientation,
         )
 
     def add_body_mujoco(self, body, model, data, mesh_name=None):
-        self.add_object_mujoco(body, model, data, mesh_name=mesh_name)
+        self.add_object_mujoco(body, model, data, mesh_name=mesh_name, obj_type=mj.mjtObj.mjOBJ_BODY)
+
+    def add_geom_mujoco(self, geom, model, data, mesh_name=None):
+        self.add_object_mujoco(geom, model, data, mesh_name=mesh_name, obj_type=mj.mjtObj.mjOBJ_GEOM)
 
     def build_trimesh_from_mujoco(self, model, mesh_id):
         """
@@ -305,6 +325,8 @@ class Sensor:
         Else, it returns None, to prevent unnecessary rendering of the sensor.
 
         """
+        # We want the key to the dict to be either a body name or a geom name,
+        # depending on what was added
         sensor_body_id = self.tacto_body_ids[sensor_name]
         b1 = None
         b2 = None
@@ -318,6 +340,10 @@ class Sensor:
             b2 = model.geom_bodyid[c.geom2]
             b1_name = mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b1)
             b2_name = mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b2)
+
+            g1_name = mj.mj_id2name(model, mj.mjtObj.mjOBJ_GEOM, c.geom1)
+            g2_name = mj.mj_id2name(model, mj.mjtObj.mjOBJ_GEOM, c.geom2)
+
             if (b1 == sensor_body_id or b1 in self.object_body_ids) and (
                 b2 == sensor_body_id or b2 in self.object_body_ids
             ):
@@ -334,8 +360,13 @@ class Sensor:
         touch_data = touch_data[:, :, 0]  # get only the normal forces
 
         # get the object names in contact with the sensor
-        obj_name = b1_name if b2 == sensor_body_id else b2_name
+        if b1 == sensor_body_id:
+            obj_name = b2_name if b2_name in self.objects.keys() else g2_name
+        else: # b2 == sensor_body_id
+            obj_name = b1_name if b1_name in self.objects.keys() else g1_name
+        # obj_name = b1_name if b2 == sensor_body_id else b2_name
         touch_data = {obj_name: touch_data}
+        print(obj_name)
         return touch_data
 
     @property
