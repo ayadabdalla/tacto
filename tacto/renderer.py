@@ -394,7 +394,7 @@ class Renderer:
         # Update camera
         for i in range(self.nb_cam):
             camera_pose = pose.dot(self.camera_zero_poses[i])
-            self.camera_nodes[i].matrix = camera_pose
+            self.camera_nodes[i].matrix = camera_pose.copy()
             self.camera_nodes[i].name = name
 
         # Update gel
@@ -413,7 +413,7 @@ class Renderer:
         """
 
         node = self.object_nodes[obj_name]
-        position[0] = -position[0]
+        # position[0] = -position[0]
         pose = euler2matrix(angles=orientation, translation=position)
         self.scene.set_pose(node, pose=pose)
 
