@@ -84,7 +84,7 @@ class Link:
 
     # get pose from mujoco
     def get_pose(self):
-        if self.body_name.startswith("touch"):
+        if self.body_name.endswith("_pad"): ## Convention
             site_id = mj.mj_name2id(self.mujoco_model, mj.mjtObj.mjOBJ_SITE, self.body_name)
             # Get the world-space position and orientation (rotation matrix)
             cam_position = self.mujoco_data.site_xpos[site_id].copy()
@@ -93,10 +93,10 @@ class Link:
             cam_orientation = R.from_matrix(cam_orientation).as_quat(scalar_first=True)
             orientation = cam_orientation
             position = cam_position
+            position[0] = -position[0] # Flip the x-axis, as pyrender uses LHS coordinate system
         else:
             # Get the position and orientation
             position = self.mujoco_data.xpos[self.obj_id].copy()
-            position[0] = -position[0] # Flip the x-axis, as pyrender uses LHS coordinate system
             orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
             orientation = R.from_matrix(orientation).as_quat(scalar_first=True)
 
@@ -135,11 +135,16 @@ class Sensor:
         self.zrange = zrange
 
         self.cameras = {}
+        self.camera_names = []
+        self.tacto_body_ids = {} # Set of body names, whose sites are used for tacto cameras
+        self.object_body_ids = set() # Set of objects of interest that may come in contact with tacto 
+
         self.nb_cam = 0
         self.objects = {}
         self.object_poses = {}
         self.normal_forces = {}
         self._static = None
+
 
     @property
     def height(self):
@@ -154,17 +159,46 @@ class Sensor:
         return self.renderer.background
     
     def add_camera_mujoco(self, sensor_name, model, data):
+        '''
+        Add a camera for pyrender to the sensor. Doesn't actually add a camera to the mujoco model.
+        In addition, we store the associated site's body_id in tacto_body_ids for later use.
+        :param sensor_name: str
+            Name of the sensor to be added. This is defined as a mujoco.sensor.touch_Grid plugin, and its name
+              should match the name of its associated site in the mujoco model.
+        :param model: mjModel
+        :param data: mjData
+        '''
         # Get the site ID using its name
         site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, sensor_name)
+        # Create the camera to be passed to pyrender 
         self.cameras[sensor_name] = Link(site_id, -1, self.cid, data, model, sensor_name)
-        self.nb_cam += 1
+        # Keep track of the number of cameras 
+        self.nb_cam = len(self.cameras.keys())
+        # Remember what the associated site's body_id is for contact checking
+        self.tacto_body_ids[sensor_name] = model.site_bodyid[site_id]
+        self.camera_names = list(self.cameras.keys())
 
     def add_object_mujoco(self, body_name, model, data):
+        '''
+        Add an object to the list of objects to be tracked by the sensor.
+        The given body_name is used to find the corresponding mesh's name as defined in the xml, by appending _mesh.
+        e.g. if body_name is "box_geom", the mesh name must be "box_geom_mesh".
+        This mesh is passed to pyrender for rendering the tacto image.
+        Since it requires the corresponding object body's pose in the simulation, at least one mj_step should be called 
+        before this function.
+
+        :param body_name: str
+            Name of the body to be added. This is defined as a mujoco body, and its associated mesh is expected to be 
+            defined in the mujoco model with the name body_name + "_mesh".
+        :param model: mjModel
+        :param data: mjData
+        '''
         mesh_name = body_name + "_mesh"
         # get object from mujoco
         mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH,mesh_name)
         print(f"mesh_id: {mesh_id}",mesh_name)
         body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, body_name)
+        self.object_body_ids.add(body_id)
         obj_trimesh = self.build_trimesh_from_mujoco(model,mesh_id)
         self.objects[body_name] = Link(body_id, -1, self.cid,data,model, body_name=body_name)
         position, orientation = self.objects[body_name].get_pose()
@@ -212,6 +246,8 @@ class Sensor:
 
         # Create the trimesh object
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+        mesh.visual.face_colors = [100, 100, 100, 255]
+        mesh.visual.vertex_colors = [100, 100, 100, 255]
         #show the mesh in a standalone window
         return mesh
 
@@ -229,6 +265,28 @@ class Sensor:
             self.object_poses[obj_name] = self.objects[obj_name].get_pose()
 
     def get_force_mujoco(self, sensor_name, model, data):
+        
+        sensor_body_id = self.tacto_body_ids[sensor_name]
+        b1 = None
+        b2 = None
+        b1_name = None
+        b2_name = None
+        got_contact = False
+        if(len(data.contact) == 0):
+            return None
+        for c in data.contact:
+            b1 = model.geom_bodyid[c.geom1]
+            b2 = model.geom_bodyid[c.geom2]
+            b1_name = mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b1)
+            b2_name = mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b2)
+            if (b1 == sensor_body_id or b1 in self.object_body_ids) and \
+               (b2 == sensor_body_id or b2 in self.object_body_ids):
+                # If the contact is between tacto body and object body, we are interested in the force data
+                print(f"Contact between {b1_name} and {b2_name}")
+                got_contact = True
+        if not got_contact:
+            return None
+
         # Fetch touch grid data
         sensor_id = model.sensor(sensor_name).id
         touch_data = data.sensordata[
@@ -237,9 +295,10 @@ class Sensor:
             (120, 160, 3)
         ) 
         touch_data = touch_data[:, :, 0] # get only the normal forces
+
         # get the object names in contact with the sensor
-        # contact_names = data.contact_names # TODO: get the contact names from mujoco
-        touch_data = {"can": touch_data}
+        obj_name = b1_name if b2 == sensor_body_id else b2_name
+        touch_data = {obj_name: touch_data}
         return touch_data
 
     @property
@@ -266,7 +325,7 @@ class Sensor:
         colors = []
         depths = []
         for i in range(self.nb_cam):
-            cam_name = f"touch"
+            cam_name = self.camera_names[i]
 
             # get the contact normal forces
             normal_forces = self.get_force_mujoco(cam_name, model,data)
