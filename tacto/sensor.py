@@ -103,14 +103,14 @@ class Link:
             position = self.mujoco_data.xpos[self.obj_id].copy()
             orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
             orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
-            orientation[0] += np.pi/2
+            orientation[0] += np.pi/2 # essentially applying mujoco_to_pyrender_rotation
 
         elif self.obj_type == mj.mjtObj.mjOBJ_GEOM:
             # For geom, fetch from geom_*
             position = self.mujoco_data.geom_xpos[self.obj_id].copy()
             orientation = self.mujoco_data.geom_xmat[self.obj_id].reshape(3, 3).copy()
             orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
-            orientation[0] += np.pi/2
+            orientation[0] += np.pi/2 # essentially applying mujoco_to_pyrender_rotation
 
         else:
             # Handle other object types if needed
@@ -129,7 +129,6 @@ class Sensor:
         visualize_gui: bool = True,
         show_depth: bool = True,
         zrange: float = 0.002,
-        cid: int = 0,
     ):
         """
         Initializes the tacto sensor.
@@ -148,10 +147,7 @@ class Sensor:
             If True, shows the depth image in the GUI window
         :param zrange:float = 0.002
             Depth value used to normalize the depth image
-        :param cid:int = 0,
-            Client ID for the sensor
         """
-        self.cid = cid
         self.renderer = Renderer(width, height, background, config_path)
 
         self.visualize_gui = visualize_gui
@@ -258,14 +254,22 @@ class Sensor:
         )
 
     def add_body_mujoco(self, body, model, data, mesh_name=None):
+        '''
+        Convenience function that wraps add_object_mujoco for mjOBJ_BODY type objects.
+        '''
         self.add_object_mujoco(body, model, data, mesh_name=mesh_name, obj_type=mj.mjtObj.mjOBJ_BODY)
 
     def add_geom_mujoco(self, geom, model, data, mesh_name=None):
+        '''
+        Convenience function that wraps add_object_mujoco for mjOBJ_GEOM type objects.
+        '''
         self.add_object_mujoco(geom, model, data, mesh_name=mesh_name, obj_type=mj.mjtObj.mjOBJ_GEOM)
 
     def build_trimesh_from_mujoco(self, model, data, mesh_id, obj_id, obj_type):
         """
         Create a trimesh object from MuJoCo mesh data.
+        Applies the appropriate transformation to the extracted mesh (mujoco_to_pyrender_rotation) 
+        to match the coordinate system between MuJoCo and pyrender.
 
         Parameters:
             model: mjModel
@@ -293,21 +297,6 @@ class Sensor:
 
         # Create the trimesh object
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-
-        # Fetch the current transform of the object 
-        if(obj_type == mj.mjtObj.mjOBJ_BODY):
-            # For bodies, we use the xmat and xpos from data
-            position = data.xpos[obj_id].copy()
-            orientation = data.xmat[obj_id].reshape(3, 3).copy()
-        elif(obj_type == mj.mjtObj.mjOBJ_GEOM):
-            # For geoms, we use the geom_xpos and geom_xmat from data
-            position = data.geom_xpos[obj_id].copy()
-            orientation = data.geom_xmat[obj_id].reshape(3, 3).copy()
-        mj_tf = np.eye(4)
-        # mj_tf[:3, :3] = orientation
-        # mj_tf[:3, 3] = position
-        # Apply the current transform to the mesh
-        # mesh.apply_transform(mj_tf)
         # Perform a transformation to match MuJoCo's coordinate system to pyrender's
         mesh.apply_transform(self.mujoco_to_pyrender_rotation())
         
@@ -452,6 +441,7 @@ class Sensor:
         cv2.waitKey(1)
     
     def mujoco_to_pyrender_rotation(self):
+        # Euler XYZ = (90, 0, 0) degrees
         return np.array([
             [1, 0, 0, 0],
             [0, 0, 1, 0],
