@@ -95,33 +95,27 @@ class Link:
             # Get the world-space position and orientation (rotation matrix)
             position = self.mujoco_data.site_xpos[self.obj_id].copy()
             orientation = self.mujoco_data.site_xmat[self.obj_id].reshape(3, 3).copy()
-            # print(f"Site {self.obj_name} pose: {position}, orientation: {orientation}")
+            orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
 
+        # Pyrender camera has a RHS convention, but geoms use LHS; this makes it 90 deg off about x-axis
         elif self.obj_type == mj.mjtObj.mjOBJ_BODY:
             # For bodies, just xpos / xmat is fine
             position = self.mujoco_data.xpos[self.obj_id].copy()
             orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
-            # print(f"Body {self.obj_name} pose: {position}, orientation: {orientation}")
+            orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
+            orientation[0] += np.pi/2
 
         elif self.obj_type == mj.mjtObj.mjOBJ_GEOM:
+            # For geom, fetch from geom_*
             position = self.mujoco_data.geom_xpos[self.obj_id].copy()
             orientation = self.mujoco_data.geom_xmat[self.obj_id].reshape(3, 3).copy()
-            # print(f"Geom {self.obj_name} pose: {position}, orientation: {orientation}")
+            orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
+            orientation[0] += np.pi/2
 
         else:
             # Handle other object types if needed
             raise NotImplementedError(
                 f"Object type {self.obj_type} not implemented for pose retrieval.")
-        # Convert quaternion to Euler angles (default ZYX convention: yaw, pitch, roll)
-        orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
-        # orientation = R.from_quat(orientation, scalar_first=True).as_euler(
-        #     "xyz", degrees=False
-        # )
-
-        # pyrender's x-axis is flipped (LHS), so we need to flip the x-axis on pos and orientation
-        position[0] = -position[0]
-        orientation[1] = -orientation[1]  # Flip x-axis for MuJoCo
-        orientation[2] = -orientation[2]  # Flip x-axis for MuJoCo
         return position, orientation
 
 
@@ -254,7 +248,7 @@ class Sensor:
         mesh_name = obj_name + "_mesh" if mesh_name is None else mesh_name
         mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH, mesh_name)
         assert mesh_id >= 0, f"Mesh {mesh_name} not found in model."
-        obj_trimesh = self.build_trimesh_from_mujoco(model, mesh_id)
+        obj_trimesh = self.build_trimesh_from_mujoco(model, data, mesh_id, obj_id, obj_type)
         # Add object in pyrender
         self.renderer.add_object(
             obj_trimesh,
@@ -269,7 +263,7 @@ class Sensor:
     def add_geom_mujoco(self, geom, model, data, mesh_name=None):
         self.add_object_mujoco(geom, model, data, mesh_name=mesh_name, obj_type=mj.mjtObj.mjOBJ_GEOM)
 
-    def build_trimesh_from_mujoco(self, model, mesh_id):
+    def build_trimesh_from_mujoco(self, model, data, mesh_id, obj_id, obj_type):
         """
         Create a trimesh object from MuJoCo mesh data.
 
@@ -285,14 +279,11 @@ class Sensor:
         # Get starting index and number of vertices for the mesh
         start_vert = model.mesh_vertadr[mesh_id]
         num_vert = model.mesh_vertnum[mesh_id]
-        print(f"start_vert: {start_vert}, num_vert: {num_vert}")
 
         # Extract vertices (reshape to Nx3 array)
-        print(model.mesh_vert.shape)
         vertices = model.mesh_vert[start_vert : start_vert + num_vert].reshape(-1, 3)
-        print(vertices.shape)
         # switch up x and z axis
-        vertices = vertices[:, [2, 1, 0]]
+        # vertices = vertices[:, [2, 1, 0]]
         # Get starting index and number of faces for the mesh
         start_face = model.mesh_faceadr[mesh_id]
         num_face = model.mesh_facenum[mesh_id]
@@ -301,7 +292,25 @@ class Sensor:
         faces = model.mesh_face[start_face : start_face + num_face].reshape(-1, 3)
 
         # Create the trimesh object
-        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+        # Fetch the current transform of the object 
+        if(obj_type == mj.mjtObj.mjOBJ_BODY):
+            # For bodies, we use the xmat and xpos from data
+            position = data.xpos[obj_id].copy()
+            orientation = data.xmat[obj_id].reshape(3, 3).copy()
+        elif(obj_type == mj.mjtObj.mjOBJ_GEOM):
+            # For geoms, we use the geom_xpos and geom_xmat from data
+            position = data.geom_xpos[obj_id].copy()
+            orientation = data.geom_xmat[obj_id].reshape(3, 3).copy()
+        mj_tf = np.eye(4)
+        # mj_tf[:3, :3] = orientation
+        # mj_tf[:3, 3] = position
+        # Apply the current transform to the mesh
+        # mesh.apply_transform(mj_tf)
+        # Perform a transformation to match MuJoCo's coordinate system to pyrender's
+        mesh.apply_transform(self.mujoco_to_pyrender_rotation())
+        
         return mesh
 
     def update(self):
@@ -366,7 +375,6 @@ class Sensor:
             obj_name = b1_name if b1_name in self.objects.keys() else g1_name
         # obj_name = b1_name if b2 == sensor_body_id else b2_name
         touch_data = {obj_name: touch_data}
-        print(obj_name)
         return touch_data
 
     @property
@@ -442,3 +450,11 @@ class Sensor:
             cv2.imshow("color", cv2.cvtColor(color, cv2.COLOR_RGB2BGR))
 
         cv2.waitKey(1)
+    
+    def mujoco_to_pyrender_rotation(self):
+        return np.array([
+            [1, 0, 0, 0],
+            [0, 0, 1, 0],
+            [0, -1, 0, 0],
+            [0, 0, 0, 1]
+        ])
