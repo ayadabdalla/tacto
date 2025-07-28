@@ -25,7 +25,6 @@ import logging
 
 import cv2
 import numpy as np
-import pybullet as p
 import pyrender
 import trimesh
 from omegaconf import OmegaConf
@@ -395,7 +394,7 @@ class Renderer:
         # Update camera
         for i in range(self.nb_cam):
             camera_pose = pose.dot(self.camera_zero_poses[i])
-            self.camera_nodes[i].matrix = camera_pose
+            self.camera_nodes[i].matrix = camera_pose.copy()
             self.camera_nodes[i].name = name
 
         # Update gel
