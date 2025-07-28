@@ -242,11 +242,26 @@ class Sensor:
         )
         position, orientation = self.objects[obj_name].get_pose()
 
-        # Construct the trimesh
-        mesh_name = obj_name + "_mesh" if mesh_name is None else mesh_name
-        mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH, mesh_name)
-        assert mesh_id >= 0, f"Mesh {mesh_name} not found in model."
-        obj_trimesh = self.build_trimesh_from_mujoco(model, data, mesh_id, obj_id, obj_type)
+        if(obj_type == mj.mjtObj.mjOBJ_GEOM):
+            # if obj_type=GEOM, we need to check if it is a mesh or a primitive
+            geom_type = model.geom_type[obj_id]
+
+            if(geom_type == mj.mjtGeom.mjGEOM_MESH):
+                # if mesh, use the mesh name for creating the trimesh
+                # Construct the trimesh
+                mesh_name = obj_name + "_mesh" if mesh_name is None else mesh_name
+                mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH, mesh_name)
+                assert mesh_id >= 0, f"Mesh {mesh_name} not found in model."
+                obj_trimesh = self.build_trimesh_from_mujoco(model, mesh_id)
+            else:
+                obj_trimesh = self.build_primitive_trimesh_from_mujoco(model, obj_id, geom_type)
+        else: 
+            # if obj_type=BODY, we assume it has a corresponding mesh defined in the model
+            # Construct the trimesh
+            mesh_name = obj_name + "_mesh" if mesh_name is None else mesh_name
+            mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH, mesh_name)
+            assert mesh_id >= 0, f"Mesh {mesh_name} not found in model."
+            obj_trimesh = self.build_trimesh_from_mujoco(model, mesh_id)
 
         # Add object in pyrender
         self.renderer.add_object(
@@ -268,7 +283,7 @@ class Sensor:
         '''
         self.add_object_mujoco(geom, model, data, mesh_name=mesh_name, obj_type=mj.mjtObj.mjOBJ_GEOM)
 
-    def build_trimesh_from_mujoco(self, model, data, mesh_id, obj_id, obj_type):
+    def build_trimesh_from_mujoco(self, model, mesh_id):
         """
         Create a trimesh object from MuJoCo mesh data.
         Applies the appropriate transformation to the extracted mesh (mujoco_to_pyrender_rotation) 
@@ -304,6 +319,68 @@ class Sensor:
         mesh.apply_transform(self.mujoco_to_pyrender_rotation())
         
         return mesh
+
+    def build_primitive_trimesh_from_mujoco(self, model, geom_id, geom_type):
+        """
+        Create a trimesh primitive (sphere, box, cylinder, capsule, ellipsoid) 
+        from MuJoCo geom data. Applies coordinate system conversion for rendering.
+
+        Parameters:
+            model: mjModel
+                The MuJoCo model containing geometry data.
+            geom_id: int
+                The ID of the geometry in model.geom_*
+            geom_type: int
+                The geom type (from model.geom_type[geom_id])
+
+        Returns:
+            trimesh.Trimesh: The constructed trimesh primitive.
+        """
+
+        # MuJoCo type constants
+        geom_type_map = {
+            2: "sphere",     # mjGEOM_SPHERE
+            3: "capsule",    # mjGEOM_CAPSULE
+            4: "ellipsoid",  # mjGEOM_ELLIPSOID
+            5: "cylinder",   # mjGEOM_CYLINDER
+            6: "box",        # mjGEOM_BOX
+        }
+
+        geom_type = geom_type_map.get(geom_type, None)
+        size = model.geom_size[geom_id]  # Typically (3,) for box/ellipsoid, (2,) for capsule, (1,) for sphere
+
+        if geom_type == "sphere":
+            radius = size[0]
+            mesh = trimesh.creation.icosphere(radius=radius)
+
+        elif geom_type == "cylinder":
+            radius = size[0]
+            height = 2 * size[1] # Mujoco uses half-scale
+            mesh = trimesh.creation.cylinder(radius=radius, height=height, sections=32)
+
+        elif geom_type == "box":
+            extents = 2 * size[:3] # Mujoco uses half-scale
+            mesh = trimesh.creation.box(extents=extents)
+
+        elif geom_type == "capsule":
+            radius = size[0]
+            height = 2 * size[1] # Mujoco uses half-scale
+            mesh = trimesh.creation.capsule(radius=radius, height=height, count=[32, 16])
+
+        elif geom_type == "ellipsoid":
+            # Ellipsoid is approximated by scaling a sphere
+            mesh = trimesh.creation.icosphere(subdivisions=4, radius=1.0)
+            mesh.apply_scale(size)
+
+        else:
+            raise NotImplementedError(
+                f"Primitive geom_type '{geom_type}' not supported or unknown (type id: {geom_type})"
+            )
+
+        # Apply MuJoCo-to-Pyrender coordinate transformation
+        mesh.apply_transform(self.mujoco_to_pyrender_rotation())
+        return mesh
+
 
     def update(self):
         warnings.warn(
