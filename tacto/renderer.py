@@ -563,8 +563,8 @@ class Renderer:
             if object_poses is not None and normal_forces is not None:
                 # Get camera pose for adjusting object pose
                 camera_pose = self.camera_nodes[i].matrix
-                camera_pos = camera_pose[:3, 3].T
-                camera_ori = R.from_matrix(camera_pose[:3, :3]).as_quat()
+                camera_pos = camera_pose[:3, 3].T #TODO:: @ayadabdalla check for correctness
+                camera_ori = R.from_matrix(camera_pose[:3, :3]).as_quat() #TODO:: @ayadabdalla check for correctness
 
                 self.adjust_with_force(
                     camera_pos,

@@ -101,6 +101,7 @@ class Link:
         elif self.obj_type == mj.mjtObj.mjOBJ_BODY:
             # For bodies, just xpos / xmat is fine
             position = self.mujoco_data.xpos[self.obj_id].copy()
+            position[0] = -position[0] # camera in pyrender is left-handed
             orientation = self.mujoco_data.xmat[self.obj_id].reshape(3, 3).copy()
             orientation = R.from_matrix(orientation).as_euler("xyz", degrees=False)
             orientation[0] += np.pi/2 # essentially applying mujoco_to_pyrender_rotation
@@ -193,6 +194,7 @@ class Sensor:
         """
         # Get the site ID using its name
         site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, sensor_name)
+
         # Create the camera to be passed to pyrender
         self.cameras[sensor_name] = Link(
             site_id, mj.mjtObj.mjOBJ_SITE, data, model, sensor_name
@@ -245,6 +247,7 @@ class Sensor:
         mesh_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_MESH, mesh_name)
         assert mesh_id >= 0, f"Mesh {mesh_name} not found in model."
         obj_trimesh = self.build_trimesh_from_mujoco(model, data, mesh_id, obj_id, obj_type)
+
         # Add object in pyrender
         self.renderer.add_object(
             obj_trimesh,
@@ -285,9 +288,9 @@ class Sensor:
         num_vert = model.mesh_vertnum[mesh_id]
 
         # Extract vertices (reshape to Nx3 array)
+
         vertices = model.mesh_vert[start_vert : start_vert + num_vert].reshape(-1, 3)
-        # switch up x and z axis
-        # vertices = vertices[:, [2, 1, 0]]
+
         # Get starting index and number of faces for the mesh
         start_face = model.mesh_faceadr[mesh_id]
         num_face = model.mesh_facenum[mesh_id]
@@ -364,6 +367,7 @@ class Sensor:
             obj_name = b1_name if b1_name in self.objects.keys() else g1_name
         # obj_name = b1_name if b2 == sensor_body_id else b2_name
         touch_data = {obj_name: touch_data}
+
         return touch_data
 
     @property
@@ -433,7 +437,7 @@ class Sensor:
             color_n_depth = np.concatenate([color, depth], axis=0)
 
             cv2.imshow(
-                "color and depth", cv2.cvtColor(color_n_depth, cv2.COLOR_RGB2BGR)
+                "Tacto Tactile Signal", cv2.cvtColor(color_n_depth, cv2.COLOR_RGB2BGR)
             )
         else:
             cv2.imshow("color", cv2.cvtColor(color, cv2.COLOR_RGB2BGR))
