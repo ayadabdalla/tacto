@@ -139,9 +139,9 @@ def main(cfg):
 
     while not glfw.window_should_close(window):
         # step simulation of mujoco model
-        data.qpos[model.joint("xx").qposadr] = min(data.qpos[model.joint("xx").qposadr], -0.003)
-        data.qpos[model.joint("yy").qposadr] = 0# max(min(data.qpos[model.joint("yy").qposadr], CAN_XYZ_LIM), -CAN_XYZ_LIM)
-        data.qpos[model.joint("zz").qposadr] = 0# max(min(data.qpos[model.joint("zz").qposadr], CAN_XYZ_LIM), -CAN_XYZ_LIM)
+        data.qpos[model.joint("xx").qposadr] = min(data.qpos[model.joint("xx").qposadr], -0.001)
+        data.qpos[model.joint("yy").qposadr] = max(min(data.qpos[model.joint("yy").qposadr], CAN_XYZ_LIM), -CAN_XYZ_LIM)
+        data.qpos[model.joint("zz").qposadr] = max(min(data.qpos[model.joint("zz").qposadr], CAN_XYZ_LIM), -CAN_XYZ_LIM)
         mj.mj_step(model, data)
 
         #   If you don't want to use the separate render thread, 
