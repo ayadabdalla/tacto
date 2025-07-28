@@ -51,17 +51,15 @@ In essence, `sensor.py` fetches the user-defined MuJoCo `geom` object as well as
 
 While a MuJoCo `body` might be a better anaologous entity of PyBullet's `Link` element, it is often the case that the child `geom` component's mesh has pose offset from the parent `body`, even if the child's pose-related parameters are all set to 0, e.g. `<geom ... pos="0 0 0" euler="0 0 0">`. As such, fetching the `geom` object information directly yields more consistent results than `body`.
 
+Both custom mesh files (`mjGEOM_MESH`) and primitives (`mjGEOM_SPHERE/CAPSULE/ELLIPSOID/CYLINDER/BOX`) are supported.
+
 The pyrender-side "camera" is mounted at the user-defined MuJoCo `site` in the XML file. The force sensor component of pyrender is replaced with MuJoCo's `touch-sensor` plugin, which should also be mounted on the same `site` as the camera.
 
 ## Code Example
 A thoroughly explained example can be found in [examples/demo_mujoco_digit.py](examples/demo_mujoco_digit.py), which contains a simple MuJoCo environment with several example meshes to show off the sensor's functionalities, as well as how the sensor can be integrated into your existing MuJoCO environment.
 
-## Limitations
-In the current version, the package requires that a dedicated mesh file exists, such as `.obj` or `.stl`, even for primitive shapes like spheres and cubes. Adding geometric primitives to the mesh creation logic is in the works.
-
 ## Upcoming features
 - Multi-sensor examples, including a robotic hand
-- Support for MuJoCo primitive shapes for rendering
 
 ### Headless Rendering
 NOTE: the renderer requires a screen. For rendering headless, use the "EGL" mode with GPU and CUDA driver or "OSMESA" with CPU. 
