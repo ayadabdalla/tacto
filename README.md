@@ -8,12 +8,14 @@
 <img height="20" src="/website/static/img/digit-logo.svg" alt="DIGIT-logo" />
 </a>
 
-<img src="/website/static/img/teaser.jpg?raw=true" alt="TACTO Simulator" />
+<img src="/website/static/img/mujoco-tacto.jpg?raw=true" alt="TACTO Simulator" />
 
+Developed & Tested on Ubuntu 22.04 & MuJoCo 3.2.6
 
-This package provides a simulator for vision-based tactile sensors, such as [DIGIT](https://digit.ml).
-It provides models for the integration with PyBullet, as well as a renderer of touch readings.
-For more information refer to the corresponding paper [TACTO: A Fast, Flexible, and Open-source Simulator for High-resolution Vision-based Tactile Sensors](https://arxiv.org/abs/2012.08456).
+This repository is a MuJoCo port of the [TACTO](https://github.com/facebookresearch/tacto) simulator.
+It ports over the core functionalities of TACTO, namely the [sensor.py](tacto/sensor.py), which implements the vast majority of MuJoCo interface logic, and the [renderer.py](tacto/renderer.py), which contains only a minor edit for ensuring that the MuJoCo-pyrender coordinate system is aligned.
+
+The updated code has been thoroughly documented for better clarity on how the overall package functions, which means it can be easily adopted to other environments easily. For more information on the package itself, please refer to the original repository.
 
 NOTE: the simulator is not meant to provide a physically accurate dynamics of the contacts (e.g., deformation, friction), but rather relies on existing physics engines.
 
@@ -22,56 +24,47 @@ NOTE: the simulator is not meant to provide a physically accurate dynamics of th
 
 ## Installation
 
-The preferred way of installation is through PyPi:
+For this port, we recommend cloning the repository and installing the package manually:
 
 ```bash
-pip install tacto
-```
-
-Alternatively, you can manually clone the repository and install the package using:
-
-```bash
-git clone https://github.com/facebookresearch/tacto.git
-cd tacto
+# Optionally, create a venv or conda environment
+git clone git@github.com:ayadabdalla/tacto.git
+cd ${REPOSITORY_ROOT}
+git checkout rcs_refactor
 pip install -e .
 ```
+This will install all dependencies for the package. See the `pyproject.toml` file for more information. 
+
+During install, you may get warnings regarding `pyrender` requiring `pyopengl==3.1.0`. The package installs `pyopengl==3.1.9` for better compatibility with more recent packages. The warning can be safely ignored without affecting the functionality of the sensor.
 
 ## Content
 This package contain several components:
 1) A renderer to simulate readings from vision-based tactile sensors.
-2) An API to simulate vision-based tactile sensors in PyBullet.
-3) Mesh models and configuration files for the [DIGIT](https://digit.ml) and Omnitact sensors.
+2) An API to simulate vision-based tactile sensors in MuJoCo.
+3) Mesh models and configuration files for the [DIGIT](https://digit.ml).
 
-## Usage
+## Simulation Logic
+The [sensor.py](tacto/sensor.py) implements the MuJoCo-side interface to the original TACTO code, which renders the sensor readings separately in pyrender.
+All dependency on PyBullet has been removed in this version. Unlike the original TACTO package, `urdfpy` is also no longer needed (since the package is no longer maintained and often leads to dependency issues on recent systems). All mesh and pose fetching logic have been replaced with native MuJoCo API.
 
-Additional packages ([torch](https://github.com/pytorch/pytorch), [gym](https://github.com/openai/gym), [pybulletX](https://github.com/facebookresearch/pybulletX)) are required to run the following examples.
-You can install them by `pip install -r requirements/examples.txt`.
+In essence, `sensor.py` fetches the user-defined MuJoCo `geom` object as well as their poses directly via the MuJoCo API, which is then aligned with pyrender's coordinate system to allow for visually accurate rendering.
 
-For a basic example on how to use TACTO in conjunction with PyBullet look at [TBD],
+While a MuJoCo `body` might be a better anaologous entity of PyBullet's `Link` element, it is often the case that the child `geom` component's mesh has pose offset from the parent `body`, even if the child's pose-related parameters are all set to 0, e.g. `<geom ... pos="0 0 0" euler="0 0 0">`. As such, fetching the `geom` object information directly yields more consistent results than `body`.
 
-For an example of how to use just the renderer engine look at [examples/demo_render.py](examples/demo_render.py).
+The pyrender-side "camera" is mounted at the user-defined MuJoCo `site` in the XML file. The force sensor component of pyrender is replaced with MuJoCo's `touch-sensor` plugin, which should also be mounted on the same `site` as the camera.
 
-For advanced examples of how to use the simulator with PyBullet look at the [examples folder](examples).
+## Code Example
+A thoroughly explained example can be found in [examples/demo_mujoco_digit.py](examples/demo_mujoco_digit.py), which contains a simple MuJoCo environment with several example meshes to show off the sensor's functionalities, as well as how the sensor can be integrated into your existing MuJoCO environment.
 
-* [examples/demo_pybullet_digit.py](examples/demo_pybullet_digit.py): rendering RGB and Depth readings with a [DIGIT](https://digit.ml) sensor.
-<img src="/website/static/img/demo_digit.gif?raw=true" alt="Demo DIGIT" />
+## Limitations
+In the current version, the package requires that a dedicated mesh file exists, such as `.obj` or `.stl`, even for primitive shapes like spheres and cubes. Adding geometric primitives to the mesh creation logic is in the works.
 
-* [examples/demo_pybullet_allegro_hand.py](examples/demo_pybullet_omnitact.py): rendering 4 DIGIT sensors on an Allegro Hand.
-<img src="/website/static/img/demo_allegro.gif?raw=true" alt="Demo Allegro" />
-
-* [examples/demo_pybullet_omnitact.py](examples/demo_pybullet_omnitact.py): rendering RGB and Depth readings with a [OmniTact](https://arxiv.org/pdf/2003.06965.pdf) sensor.
-<img src="/website/static/img/demo_omnitact.gif?raw=true" alt="Demo OmniTact" />
-
-* [examples/demo_pybullet_grasp.py](examples/demo_grasp.py): mounted on parallel-jaw grippers and grasping objects with different configurations.
-<img src="/website/static/img/demo_grasp.gif?raw=true" alt="Demo Grasp" />
-
-* [examples/demo_pybullet_rolling.py](examples/demo_rolling.py): rolling a marble with two DIGIT sensors.
-<img src="/website/static/img/demo_rolling.gif?raw=true" alt="Demo Rolling" />
-
-* [examples/demo_pybullet_digit_shadow.py](examples/demo_pybullet_digit_shadow.py): enable shadow rendering.
-<img src="/website/static/img/demo_shadow.gif?raw=true" alt="Demo Shadow" />
+## Upcoming features
+- Multi-sensor examples, including a robotic hand
+- Support for MuJoCo primitive shapes for rendering
 
 ### Headless Rendering
+(Still needs to be tested for this port, but having `pyopengl==3.1.9` should have fixed the issues related to EGL; below is the old instruction from the original repository.)
 
 NOTE: the renderer requires a screen. For rendering headless, use the "EGL" mode with GPU and CUDA driver or "OSMESA" with CPU. 
 See [PyRender](https://pyrender.readthedocs.io/en/latest/install/index.html) for more details.
@@ -88,11 +81,6 @@ You may then specify which engine to use for headless rendering, for example,
 import os
 os.environ["PYOPENGL_PLATFORM"] = "osmesa" # osmesa cpu rendering
 ```
-
-## Operating System
-We recommend to conduct experiments on **Ubuntu**.
-
-For **macOS**, there exists some visualization problem between pybullet.GUI and pyrender as we know of. Please let us know if it can be resolved, and we will share the information at the repo!
 
 ## License
 This project is licensed under MIT license, as found in the [LICENSE](LICENSE) file.
