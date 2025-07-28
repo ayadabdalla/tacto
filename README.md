@@ -30,12 +30,12 @@ For this port, we recommend cloning the repository and installing the package ma
 # Optionally, create a venv or conda environment
 git clone git@github.com:ayadabdalla/tacto.git
 cd ${REPOSITORY_ROOT}
-git checkout rcs_refactor
 pip install -e .
+pip install pyopengl==3.1.9 # ignore warning
 ```
 This will install all dependencies for the package. See the `pyproject.toml` file for more information. 
 
-During install, you may get warnings regarding `pyrender` requiring `pyopengl==3.1.0`. The package installs `pyopengl==3.1.9` for better compatibility with more recent packages. The warning can be safely ignored without affecting the functionality of the sensor.
+When installing `pyopengl==3.1.9`, you may get warnings regarding `pyrender` requiring `pyopengl==3.1.0`. `pyrender` works fine even with the newer version of `pyopengl`, and we specifically install the newer version for better compatibility with more recent packages. The warning can be safely ignored without affecting the functionality of the sensor.
 
 ## Content
 This package contain several components:
@@ -64,22 +64,18 @@ In the current version, the package requires that a dedicated mesh file exists, 
 - Support for MuJoCo primitive shapes for rendering
 
 ### Headless Rendering
-(Still needs to be tested for this port, but having `pyopengl==3.1.9` should have fixed the issues related to EGL; below is the old instruction from the original repository.)
-
 NOTE: the renderer requires a screen. For rendering headless, use the "EGL" mode with GPU and CUDA driver or "OSMESA" with CPU. 
 See [PyRender](https://pyrender.readthedocs.io/en/latest/install/index.html) for more details.
 
-Additionally, install the patched version of PyOpenGL via,
+With `pyopengl==3.1.9`, you can directly use headless rendering mode without requiring a patched version like the original Tacto.
 
-```
-pip install git+https://github.com/mmatl/pyopengl.git@76d1261adee2d3fd99b418e75b0416bb7d2865e6
-```
-
-You may then specify which engine to use for headless rendering, for example,
+You can specify which engine to use for headless rendering (either `'egl'` or `'osmesa'`) like:
 
 ```
 import os
 os.environ["PYOPENGL_PLATFORM"] = "osmesa" # osmesa cpu rendering
+# os.environ["PYOPENGL_PLATFORM"] = "egl" # egl gpu rendering
+
 ```
 
 ## License
